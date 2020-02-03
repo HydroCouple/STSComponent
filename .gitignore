@@ -37,3 +37,11 @@ Makefile*
 # QtCtreator CMake
 CMakeLists.txt.user*
 
+build/debug/.DS_Store
+
+
+examples/
+build/
+build/debug/
+build/debug/
+STSComponent.json

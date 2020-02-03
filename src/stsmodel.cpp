@@ -5,7 +5,7 @@
 *  \section Description
 *  This file and its associated files and libraries are free software;
 *  you can redistribute it and/or modify it under the terms of the
-*  Lesser GNU General Public License as published by the Free Software Foundation;
+*  Lesser GNU Lesser General Public License as published by the Free Software Foundation;
 *  either version 3 of the License, or (at your option) any later version.
 *  fvhmcompopnent.h its associated files is distributed in the hope that it will be useful,
 *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,6 +24,7 @@
 #include "element.h"
 #include "elementjunction.h"
 #include "spatial/edge.h"
+#include "iboundarycondition.h"
 
 using namespace std;
 
@@ -31,18 +32,31 @@ STSModel::STSModel(STSComponent *component)
   : QObject(component),
     m_timeStep(0.0001), //seconds
     m_maxTimeStep(0.5), //seconds
-    m_minTimeStep(0.001), //seconds
+    m_minTimeStep(0.001), //seconds,
     m_timeStepRelaxationFactor(0.8),
     m_numInitFixedTimeSteps(2),
     m_numCurrentInitFixedTimeSteps(0),
+    m_printFrequency(10),
+    m_currentPrintCount(0),
+    m_flushToDiskFrequency(10),
+    m_currentflushToDiskCount(0),
+    m_computeDispersion(false),
     m_useAdaptiveTimeStep(true),
-    m_converged(false),
-    m_solver(nullptr),
-    m_waterDensity(1.0), //kg/m^3
-    m_cp(4187.0), //4187.0 J/kg/C
+    m_verbose(false),
+    m_numHeatElementJunctions(0),
+    m_odeSolver(nullptr),
+    m_waterDensity(1000.0), //kg/m^3
+    m_cp(4184.0), //4187.0 J/kg/C
+    m_evapWindFuncCoeffA(1.505e-8),
+    m_evapWindFuncCoeffB(1.600e-8),
+    m_bowensCoeff(0.06266151315), //KPa / C
+    #ifdef USE_NETCDF
+    m_outputNetCDF(nullptr),
+    #endif
+    m_retrieveCouplingDataFunction(nullptr),
     m_component(component)
 {
-  m_solver = new ODESolver(1, ODESolver::RKQS);
+  m_odeSolver = new ODESolver(1, ODESolver::CVODE_ADAMS);
 }
 
 STSModel::~STSModel()
@@ -61,8 +75,16 @@ STSModel::~STSModel()
   m_elementJunctions.clear();
   m_elementJunctionsById.clear();
 
-  if(m_solver)
-    delete m_solver;
+  if(m_odeSolver)
+    delete m_odeSolver;
+
+
+  closeOutputFiles();
+
+  for(IBoundaryCondition *boundaryCondition : m_boundaryConditions)
+    delete boundaryCondition;
+
+  m_boundaryConditions.clear();
 }
 
 double STSModel::minTimeStep() const
@@ -148,7 +170,7 @@ double STSModel::currentDateTime() const
 
 ODESolver *STSModel::solver() const
 {
-  return m_solver;
+  return m_odeSolver;
 }
 
 double STSModel::waterDensity() const
@@ -180,7 +202,12 @@ void STSModel::setNumSolutes(int numSolutes)
 {
   if(numSolutes >= 0)
   {
+
     m_solutes.resize(numSolutes);
+    m_maxSolute.resize(numSolutes);
+    m_minSolute.resize(numSolutes);
+    m_totalSoluteMassBalance.resize(numSolutes);
+    m_totalExternalSoluteFluxMassBalance.resize(numSolutes);
 
     for(size_t i = 0 ; i < m_solutes.size(); i++)
     {
@@ -328,13 +355,25 @@ Element *STSModel::getElement(int index)
   return m_elements[index];
 }
 
+RetrieveCouplingData STSModel::retrieveCouplingDataFunction() const
+{
+  return m_retrieveCouplingDataFunction;
+}
+
+void STSModel::setRetrieveCouplingDataFunction(RetrieveCouplingData retrieveCouplingDataFunction)
+{
+  m_retrieveCouplingDataFunction = retrieveCouplingDataFunction;
+}
+
 bool STSModel::initialize(list<string> &errors)
 {
   bool initialized = initializeInputFiles(errors) &&
                      initializeTimeVariables(errors) &&
                      initializeElements(errors) &&
                      initializeSolver(errors) &&
-                     initializeOutputFiles(errors);
+                     initializeOutputFiles(errors) &&
+                     initializeBoundaryConditions(errors);
+
 
   if(initialized)
   {
@@ -347,6 +386,12 @@ bool STSModel::initialize(list<string> &errors)
 bool STSModel::finalize(std::list<string> &errors)
 {
   closeOutputFiles();
+
+  for(IBoundaryCondition *boundaryCondition : m_boundaryConditions)
+    delete boundaryCondition;
+
+  m_boundaryConditions.clear();
+
   return true;
 }
 
@@ -380,6 +425,9 @@ bool STSModel::initializeTimeVariables(std::list<string> &errors)
 
   m_currentDateTime = m_startDateTime;
   m_nextOutputTime = m_currentDateTime;
+
+  m_currentPrintCount = 0;
+  m_currentflushToDiskCount = 0;
 
   return true;
 }
@@ -416,11 +464,23 @@ bool STSModel::initializeElements(std::list<string> &errors)
 #ifdef USE_OPENMP
 #pragma omp parallel for
 #endif
-  for(size_t i = 0 ; i < m_elements.size()  ; i++)
+  for(size_t i = 0; i < m_elements.size(); i++)
   {
     Element *element = m_elements[i];
     element->index = i;
     element->initialize();
+  }
+
+  //Set tempearture continuity junctions
+  m_numHeatElementJunctions = 0;
+
+  //Number of junctions where continuity needs to be enforced.
+  m_numSoluteElementJunctions.resize(m_solutes.size(), 0);
+
+  for(size_t i = 0 ; i < m_elementJunctions.size()  ; i++)
+  {
+    ElementJunction *elementJunction = m_elementJunctions[i];
+    elementJunction->index = i;
   }
 
   return true;
@@ -428,8 +488,59 @@ bool STSModel::initializeElements(std::list<string> &errors)
 
 bool STSModel::initializeSolver(std::list<string> &errors)
 {
-  m_solver->setSize(m_elements.size());
-  m_solver->initialize();
+  m_solverSize = m_elements.size();
+
+  if(m_solutes.size())
+  {
+    m_solverSize += m_elements.size() * m_solverSize;
+  }
+
+  m_solverCurrentValues.resize(m_solverSize, 0.0);
+  m_solverOutputValues.resize(m_solverSize, 0.0);
+
+  m_odeSolver->setSize(m_solverSize);
+  m_odeSolver->initialize();
 
   return true;
+}
+
+bool STSModel::initializeBoundaryConditions(std::list<string> &errors)
+{
+  for(size_t i = 0; i < m_boundaryConditions.size() ; i++)
+  {
+    IBoundaryCondition *boundaryCondition = m_boundaryConditions[i];
+    boundaryCondition->clear();
+    boundaryCondition->findAssociatedGeometries();
+    boundaryCondition->prepare();
+  }
+
+  return true;
+}
+
+bool STSModel::findProfile(Element *from, Element *to, std::vector<Element *> &profile)
+{
+  if(from == to)
+  {
+    profile.push_back(from);
+    return true;
+  }
+  else
+  {
+    for(Element *outgoing : from->downstreamJunction->outgoingElements)
+    {
+      if(outgoing == to)
+      {
+        profile.push_back(from);
+        profile.push_back(outgoing);
+        return true;
+      }
+      else if(findProfile(outgoing, to, profile))
+      {
+        profile.insert(profile.begin(), from);
+        return true;
+      }
+    }
+  }
+
+  return false;
 }

@@ -19,8 +19,7 @@ struct Element
     enum Bank
     {
       Left,
-      Right,
-      Lumped
+      Right
     };
 
 
@@ -120,6 +119,16 @@ struct Element
    ElementJunction *downstreamJunction;
 
    /*!
+    * \brief bank
+    */
+   Bank bank;
+
+   /*!
+    * \brief beta
+    */
+   double beta;
+
+   /*!
     * \brief length
     */
    double length;
@@ -132,7 +141,7 @@ struct Element
    /*!
     * \brief xSectionArea
     */
-   double xSectionArea;
+   Variable xSectionArea;
 
    /*!
     * \brief width
@@ -140,11 +149,54 @@ struct Element
    double width;
 
    /*!
-    * \brief beta- Fraction of the channel width that acts as a surface transient zone.
+    * \brief relativeHumidity
     */
-   double beta;
+   double relativeHumidity;
 
-   Bank bank;
+   /*!
+    * \brief evaporationRate
+    */
+   double evaporationRate;
+
+   /*!
+    * \brief evaporationHeatFlux
+    */
+   double evaporationHeatFlux;
+
+   /*!
+    * \brief saturationVaporPressure
+    */
+   double saturationVaporPressureAir;
+
+   /*!
+    * \brief saturationVaporPressure
+    */
+   double saturationVaporPressureWater;
+
+   /*!
+    * \brief vaporPressure
+    */
+   double vaporPressureAir;
+
+   /*!
+    * \brief vaporPressureWater
+    */
+   double vaporPressureWater;
+
+   /*!
+    * \brief windVelocity
+    */
+   double windSpeed;
+
+   /*!
+    * \brief airTemperature
+    */
+   double airTemperature;
+
+   /*!
+    * \brief convectionHeatFlux
+    */
+   double convectionHeatFlux;
 
    /*!
     * \brief externalHeatFluxes of J / s
@@ -157,9 +209,51 @@ struct Element
    double radiationFluxes;
 
    /*!
-    * \brief externalSoluteFluxes of the form m^3. C / s
+    * \brief externalSoluteFluxes of the form kg / s
     */
    double *externalSoluteFluxes;
+
+   /*!
+    * \brief heatBalance
+    */
+   double totalHeatBalance;
+
+   /*!
+    * \brief totalRadiationHeatBalance
+    */
+   double totalRadiationFluxesHeatBalance;
+
+   /*!
+    * \brief totalExternalHeatFluxesBalance
+    */
+   double totalExternalHeatFluxesBalance;
+
+   /*!
+    * \brief totalEvaporativeHeatFluxesBalance
+    */
+   double totalEvaporativeHeatFluxesBalance;
+
+   /*!
+    * \brief totalConvectiveHeatFluxesBalance
+    */
+   double totalConvectiveHeatFluxesBalance;
+
+   /*!
+    * \brief soluteMassBalance
+    */
+   double *totalSoluteMassBalance;
+
+   /*!
+    * \brief totalExternalSoluteFluxesMassBalance
+    */
+   double *totalExternalSoluteFluxesMassBalance;
+
+   double mcHeatExchangeFlux;
+
+   double *mcSoluteExchangeFlux;
+
+   double windFunction;
+
 
    /*!
     * \brief model
@@ -186,6 +280,22 @@ struct Element
    double computeDTDt(double dt, double T[]);
 
    /*!
+    * \brief computeEvaporation
+    * \param dt
+    * \param T
+    * \return
+    */
+   void computeDTDtEvaporation();
+
+   /*!
+    * \brief computeConvection
+    * \param dt
+    * \param T
+    * \return
+    */
+   void computeDTDtConvection();
+
+   /*!
     * \brief computeDSoluteDt
     * \param dt
     * \param S
@@ -195,11 +305,27 @@ struct Element
    double computeDSoluteDt(double dt, double S[], int soluteIndex);
 
    /*!
+    * \brief calculateHydraulicVariables
+    * \return
+    */
+   void calculateHydraulicVariables();
+
+   /*!
     * \brief commputeDispersionFactor 1/s
     * \return
     */
    double computeDispersionFactor() const;
 
+   /*!
+    * \brief computeHeatBalance
+    */
+   void computeHeatBalance(double timeStep);
+
+   /*!
+    * \brief computeSoluteBalance
+    * \param soluteIndex
+    */
+   void computeSoluteBalance(double timeStep, int soluteIndex);
 
 };
 

@@ -5,7 +5,7 @@
 *  \section Description
 *  This file and its associated files and libraries are free software;
 *  you can redistribute it and/or modify it under the terms of the
-*  Lesser GNU General Public License as published by the Free Software Foundation;
+*  Lesser GNU Lesser General Public License as published by the Free Software Foundation;
 *  either version 3 of the License, or (at your option) any later version.
 *  fvhmcompopnent.h its associated files is distributed in the hope that it will be useful,
 *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -23,6 +23,7 @@
 #include "stscomponent_global.h"
 #include "spatial/network.h"
 #include "odesolver.h"
+#include "threadsafenetcdf/threadsafencvar.h"
 
 #include <vector>
 #include <string>
@@ -30,11 +31,18 @@
 #include <QFileInfo>
 #include <QTextStream>
 
+#ifdef USE_NETCDF
+#include <netcdf>
+#endif
+
 class STSComponent;
 struct Element;
 struct ElementJunction;
 class Edge;
 class STSModel;
+class IBoundaryCondition;
+class TimeSeries;
+class ThreadSafeNcFile;
 
 struct SolverUserData
 {
@@ -42,22 +50,31 @@ struct SolverUserData
     int variableIndex = -1;
 };
 
+typedef void (*RetrieveCouplingData)(STSModel *model, double dateTime);
+typedef void (*WriteVariableToNetCDF)(size_t currentTime, ThreadSafeNcVar &variable, const std::vector<Element*>& elements);
+
 class STSCOMPONENT_EXPORT STSModel : public QObject
 {
     Q_OBJECT
 
     friend struct ElementJunction;
     friend struct Element;
+    friend class RadiativeFluxBC;
+    friend class SourceBC;
+    friend class HydraulicsBC;
+    friend class MainChannelBC;
+    friend class MCBoundaryCondition;
+    friend class MeteorologyBC;
 
   public:
 
     /*!
-     * \brief STSModel - Constructor for the Computational engine for the Stream Temperature Model.
+     * \brief STMModel - Constructor for the Computational engine for the Stream Temperature Model.
      */
     STSModel(STSComponent *component);
 
     /*!
-     * \brief ~STSModel - Destructor for the Computational engine for the Stream Temperature Model.
+     * \brief ~STMModel - Destructor for the Computational engine for the Stream Temperature Model.
      */
     ~STSModel();
 
@@ -104,37 +121,37 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
     double timeStepRelaxationFactor() const;
 
     /*!
-     * \brief setTimeStepRelaxationFactor
+     * \brief setTimeStepRelaxationFactor - Adaptive time-step relaxation factor
      * \param tStepRelaxFactor
      */
     void setTimeStepRelaxationFactor(double tStepRelaxFactor);
 
     /*!
-     * \brief currentTimeStep
+     * \brief currentTimeStep - Current time step in seconds
      * \return
      */
     double currentTimeStep() const;
 
     /*!
-     * \brief startDateTime
+     * \brief startDateTime - Start date and time specified as a modified julian date
      * \return
      */
     double startDateTime() const;
 
     /*!
-     * \brief setStartDate
-     * \param dateTime
+     * \brief setStartDate - Sets the value of the start date and time
+     * \param dateTime - Start date and time specified as modified julian date
      */
     void setStartDateTime(double dateTime);
 
     /*!
-     * \brief endDateTime
+     * \brief endDateTime - End datetime specified as
      * \return
      */
     double endDateTime() const;
 
     /*!
-     * \brief setEndDateTime
+     * \brief setEndDateTime Sets the value of the end datetime
      * \param dateTime
      */
     void setEndDateTime(double dateTime);
@@ -162,7 +179,6 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
      * \return
      */
     ODESolver *solver() const;
-
 
     /*!
      * \brief waterDensity
@@ -213,6 +229,42 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
      * \return
      */
     std::string solute(int soluteIndex) const;
+
+    /*!
+     * \brief verbose
+     * \return
+     */
+    bool verbose() const;
+
+    /*!
+     * \brief setVerbose
+     * \param verbose
+     */
+    void setVerbose(bool verbose);
+
+    /*!
+     * \brief printFrequency
+     * \return
+     */
+    int printFrequency() const;
+
+    /*!
+     * \brief setPrintFrequency
+     * \param printFreq
+     */
+    void setPrintFrequency(int printFreq);
+
+    /*!
+     * \brief flushToDiskFrequency
+     * \return
+     */
+    int flushToDiskFrequency() const;
+
+    /*!
+     * \brief setFlushToDiskFrequency
+     * \param diskFlushFrequency
+     */
+    void setFlushToDiskFrequency(int diskFlushFrequency);
 
     /*!
      * \brief numElementJunctions
@@ -298,28 +350,16 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
     Element *getElement(int index);
 
     /*!
-     * \brief discretizationFile
+     * \brief inputFile
      * \return
      */
-    QFileInfo discretizationFile() const;
+    QFileInfo inputFile() const;
 
     /*!
-     * \brief setDiscretizationFile
-     * \param discretizationFile
+     * \brief setInputFile
+     * \param inputFile
      */
-    void setDiscretizationFile(const QFileInfo &discretizationFile);
-
-    /*!
-     * \brief hydrodynamicFile
-     * \return
-     */
-    QFileInfo hydrodynamicFile() const;
-
-    /*!
-     * \brief setHydrodynamicFile
-     * \param hydrodynamicFile
-     */
-    void setHydrodynamicFile(const QFileInfo &hydrodynamicFile);
+    void setInputFile(const QFileInfo &inputFile);
 
     /*!
      * \brief outputCSVFile
@@ -332,6 +372,29 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
      * \param outputFile
      */
     void setOutputCSVFile(const QFileInfo &outputFile);
+
+    /*!
+     * \brief outputNetCDFFile
+     * \return
+     */
+    QFileInfo outputNetCDFFile() const;
+
+    /*!
+     * \brief setOutputNetCDFFile
+     * \param outputNetCDFFile
+     */
+    void setOutputNetCDFFile(const QFileInfo &outputNetCDFFile);
+
+    /*!
+     * \brief retrieveCouplingDataFunction
+     * \return
+     */
+    RetrieveCouplingData retrieveCouplingDataFunction() const;
+
+    /*!
+     * \brief setRetrieveCouplingDataFunction
+     */
+    void setRetrieveCouplingDataFunction(RetrieveCouplingData retrieveCouplingDataFunction);
 
     /*!
      * \brief initialize
@@ -352,7 +415,19 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
      */
     bool finalize(std::list<std::string> &errors);
 
+    /*!
+     * \brief printStatus
+     */
+    void printStatus();
+
   private:
+
+    /*!
+     * \brief initializeInputFiles
+     * \param errors
+     * \return
+     */
+    bool initializeInputFiles(std::list<std::string> &errors);
 
     /*!
      * \brief initializeTimeVariables
@@ -376,13 +451,6 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
     bool initializeSolver(std::list<std::string> & errors);
 
     /*!
-     * \brief initializeInputFiles
-     * \param errors
-     * \return
-     */
-    bool initializeInputFiles(std::list<std::string> &errors);
-
-    /*!
      * \brief intializeOutputFiles
      * \param errors
      * \return
@@ -402,6 +470,13 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
      * \return
      */
     bool initializeNetCDFOutputFile(std::list<std::string> &errors);
+
+    /*!
+     * \brief initializeBoundaryConditions
+     * \param errors
+     * \return
+     */
+    bool initializeBoundaryConditions(std::list<std::string> &errors);
 
     /*!
      * \brief prepareForNextTimeStep
@@ -424,19 +499,13 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
      */
     double computeTimeStep();
 
+    void calculateHydraulicVariables();
 
     /*!
      * \brief solveHeat
      * \param timeStep
      */
-    void solveHeatTransport(double timeStep);
-
-    /*!
-     * \brief solveSoluteContinuity
-     * \param soluteIndex
-     * \param timeStep
-     */
-    void solveSoluteTransport(int soluteIndex, double timeStep);
+    void solve(double timeStep);
 
     /*!
      * \brief computeDTDt
@@ -446,16 +515,81 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
      * \param y
      * \param dydt
      */
-    static void computeDTDt(double t, double y[], double dydt[], void *userData);
+    static void computeDYDt(double t, double y[], double dydt[], void *userData);
 
     /*!
-     * \brief computeSoluteDYDt
-     * \param t
-     * \param y
-     * \param dydt
-     * \param userData
+     * \brief readInputFileOptionTag
+     * \param line
      */
-    static void computeDSoluteDt(double t, double y[], double dydt[], void *userData);
+    bool readInputFileOptionTag(const QString &line, QString &errorMessage);
+
+    /*!
+     * \brief readInputFileOutputTag
+     * \param line
+     */
+    bool readInputFileOutputTag(const QString &line, QString &errorMessage);
+
+    /*!
+     * \brief readInputFileSolutesTag
+     * \param line
+     */
+    bool readInputFileSolutesTag(const QString &line, QString &errorMessage);
+
+    /*!
+     * \brief readInputFileElementJunctionsTag
+     * \param line
+     */
+    bool readInputFileElementJunctionsTag(const QString &line, QString &errorMessage);
+
+    /*!
+     * \brief readInputFileElementsTag
+     * \param line
+     */
+    bool readInputFileElementsTag(const QString &line, QString &errorMessage);
+
+    /*!
+     * \brief readInputFileNonPointSourcesTag
+     * \param line
+     */
+    bool readInputFileSourcesTag(const QString &line, QString &errorMessage);
+
+    /*!
+     * \brief readInputFileNonUniformHydraulicsTag
+     * \param line
+     */
+    bool readInputFileHydraulicsTag(const QString &line, QString &errorMessage);
+
+    /*!
+     * \brief readInputFileNonUniformRadiativeFluxesTag
+     * \param line
+     * \param errorMessage
+     * \return
+     */
+    bool readInputFileRadiativeFluxesTag(const QString &line, QString &errorMessage);
+
+    /*!
+     * \brief readInputFileNonUniformMeteorologyTag
+     * \param line
+     * \param errorMessage
+     * \return
+     */
+    bool readInputFileMeteorologyTag(const QString &line, QString &errorMessage);
+
+    /*!
+     * \brief readInputFileNonUniformMCBoundaryConditionTag
+     * \param line
+     * \param errorMessage
+     * \return
+     */
+    bool readInputFileMCBoundaryConditionTag(const QString &line, QString &errorMessage);
+
+    /*!
+     * \brief readInputFileTimeSeries
+     * \param line
+     * \param errorMessage
+     * \return
+     */
+    bool readInputFileTimeSeriesTag(const QString &line, QString &errorMessage);
 
     /*!
      * \brief writeOutput
@@ -487,29 +621,62 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
      */
     void closeOutputNetCDFFile();
 
+    /*!
+     * \brief relativePathtoAbsolute
+     * \param inputFile
+     * \return
+     */
+    QFileInfo relativePathToAbsolute(const QFileInfo& fileInfo);
+
+    /*!
+     * \brief findProfile
+     * \param from
+     * \param to
+     * \param m_profile
+     * \return
+     */
+    bool findProfile(Element *from, Element *to, std::vector<Element *> &profile);
+
   private:
 
-    //Solute variable names;
     std::vector<std::string> m_solutes; // Names of the solutes.
 
     //Time variables
     double m_timeStep, //seconds
-    m_startDateTime, //MJD
-    m_endDateTime, //MJD
-    m_currentDateTime, //MJD
+    m_startDateTime, //Modified Julian Day
+    m_endDateTime, //Modified Julian Day
+    m_currentDateTime, //Modified Julian Day
+    m_prevDateTime, //Modified Julian Day
     m_maxTimeStep, //seconds
     m_minTimeStep, //seconds
     m_outputInterval, //seconds
-    m_nextOutputTime,//MJD
-    m_timeStepRelaxationFactor; //
+    m_nextOutputTime,//Julian Day
+    m_timeStepRelaxationFactor,
+    m_maxTemp, //Tracks maximum temperature so far
+    m_minTemp, //Tracks minimum temperature so far
+    m_prevTimeStep =0;
 
-    //Number of initial fixed timeSteps of the minimum timestep to use when using the adaptive time step;
-    int m_numInitFixedTimeSteps,
-    m_numCurrentInitFixedTimeSteps;
+    std::vector<float> m_maxSolute, //array for tracking maximum solute concentrations
+    m_minSolute, //array for tracking minimum solute concentrations
+    m_totalSoluteMassBalance, // Tracks total mass balance of solutes (kg)
+    m_totalExternalSoluteFluxMassBalance; //Tracks total mass balance from external sources (kg)
 
-    bool m_useAdaptiveTimeStep,
-    m_converged;
+    int m_numInitFixedTimeSteps, //Number of initial fixed timeSteps of the minimum timestep to use when using the adaptive time step;
+    m_numCurrentInitFixedTimeSteps, //Count number of initial minimum timesteps that have been used
+    m_printFrequency, //Number of timesteps before printing
+    m_currentPrintCount, // Number of timesteps
+    m_flushToDiskFrequency, // Number of times to write output stored in memory to disk
+    m_currentflushToDiskCount, //Number of timesteps that have been stored in memory so far since the last flush to disk
+    m_addedSoluteCount;
 
+    bool m_computeDispersion, //Override user provided dispersion and compute dispersion based on Fisher
+    m_useAdaptiveTimeStep, //Use the adaptive time step option
+    m_verbose, //Print simulation information to console
+    m_flushToDisk, //Write output saved in memory to disk
+    m_useEvaporation,
+    m_useConvection;
+
+    std::unordered_map<std::string, QSharedPointer<TimeSeries>> m_timeSeries;
 
     //Element junctions
     std::vector<ElementJunction*> m_elementJunctions;
@@ -519,19 +686,59 @@ class STSCOMPONENT_EXPORT STSModel : public QObject
     std::vector<Element*> m_elements;
     std::unordered_map<std::string, Element*> m_elementsById; //added for fast lookup using identifiers instead of indexes.
 
-    //Solver Object
-    ODESolver *m_solver = nullptr;
+    //Boundary conditions list
+    std::vector<IBoundaryCondition*> m_boundaryConditions;
+
+    //Number of junctions where continuity needs to be enforced.
+    int m_numHeatElementJunctions;
+    int m_solverSize;
+    std::vector<int> m_numSoluteElementJunctions;
+
+    //Solver Objects
+    ODESolver *m_odeSolver = nullptr; //Heat solver
 
     //Global water properties
     double m_waterDensity, //kg/m^3
-    m_cp;// 4187.0; // J/kg/C
+    m_cp,// 4187.0; // J/kg/C
+    m_totalHeatBalance, //Tracks total heat accumulation (KJ)
+    m_totalRadiationHeatBalance, //Track total heat accumulation from radiation (KJ)
+    m_totalEvaporationHeatBalance, //Track total heat accumulation from evaporation (KJ)
+    m_totalConvectiveHeatBalance, //Track total heat accumulation from evaporation (KJ)
+    m_totalExternalHeatFluxBalance, //Track total heat accumulation from external heat sources (KJ)
+    m_evapWindFuncCoeffA, //Evaporation wind function coefficient
+    m_evapWindFuncCoeffB, //Evaporation wind function coefficient
+    m_bowensCoeff; //Bowen coefficient
+
+
+    std::vector<double> m_solverCurrentValues, m_solverOutputValues;
 
     //File input and output
-    QFileInfo m_discretizationFile, //Geometric discretization file specified using the SWMM version file input file format
-    m_hydrodynamicFile, //File to specify hydrodynamic parameters, initial conditions, boundary conditions,
-    m_outputCSVFileInfo; //Output CSV filepath
+    QFileInfo m_inputFile, //Input filepath
+    m_outputCSVFileInfo, //Output CSV filepath
+    m_outputNetCDFFileInfo; //Output NetCDF filepath
+
+#ifdef USE_NETCDF
+    ThreadSafeNcFile *m_outputNetCDF = nullptr; //NetCDF output file object
+    std::unordered_map<std::string, ThreadSafeNcVar> m_outNetCDFVariables;
+    std::unordered_map<std::string, bool> m_outNetCDFVariablesOnOff;
+    std::unordered_map<std::string, WriteVariableToNetCDF> m_outNetCDFVariablesIOFunctions;
+    std::vector<std::string> m_optionalOutputVariables;
+#endif
 
     QTextStream m_outputCSVStream; //Output CSV filestream
+    static const std::unordered_map<std::string, int> m_linearSolverTypeFlags; //Solver type flags
+    static const std::unordered_map<std::string, int> m_inputFileFlags, //Input file flags
+    m_optionsFlags, //Input file flags
+    m_solverTypeFlags, //Solver type flags
+    m_hydraulicVariableFlags, //Hydraulic variable flags
+    m_meteorologicalVariableFlags; //Meteorology variables
+
+    static const QRegExp m_dateTimeDelim;
+
+    QRegExp m_delimiters; //Regex delimiter
+
+    //Function to retrieve and apply coupling data
+    RetrieveCouplingData m_retrieveCouplingDataFunction;
 
     //Parent component
     STSComponent *m_component;
